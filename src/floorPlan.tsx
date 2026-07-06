@@ -1,25 +1,51 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import * as THREE from "three";
-import { Upload, RotateCcw, Move3d, FileJson } from "lucide-react";
+import {
+  Upload, RotateCcw, Move3d, FileJson, AlertCircle, Circle, CheckCircle2,
+  Layers, Settings, Share2, Edit3, Ruler, Grid3x3, Plus, Filter,
+  ChevronRight, ChevronDown, Clock, MessageSquare, User, Pin,
+} from "lucide-react";
 
-/**
- * FloorplanViewer
- * ----------------
- * Reads a floorplan JSON (walls / doors / windows / rooms) and renders
- * an interactive, roofless 3D model with three.js.
- *
- * Expected JSON shape:
- * {
- *   "walls":   [{ "start": [x,z], "end": [x,z] }, ...],
- *   "doors":   [{ "position": [x,z], "width": number }, ...],
- *   "windows": [{ "wall": wallIndex, "position": distanceAlongWall }, ...],
- *   "rooms":   [{ "name": string, "polygon": [[x,z], ...] }, ...]
- * }
- *
- * Units are treated as meters. X/Z form the ground plane, Y is height.
- */
+// ---------- Types ----------
 
-// ---------- Tunable constants ----------
+interface FloorplanData {
+  walls: { start: number[]; end: number[] }[];
+  doors: { position: number[]; width: number }[];
+  windows: { wall: number; position: number }[];
+  rooms: { name: string; polygon: number[][] }[];
+}
+
+interface IssueData {
+  _id: string;
+  name: string;
+  description: string;
+  status: "open" | "in_progress" | "resolved";
+  priority: "low" | "medium" | "high";
+  openedBy: { _id: string; username: string };
+  assignedTo?: { _id: string; username: string };
+  position?: { x: number; z: number };
+  comments: { author: { _id: string; username: string }; content: string; createdAt: string }[];
+  createdAt: string;
+}
+
+interface ProjectData {
+  _id: string;
+  projectName: string;
+  headOfConstruction: { _id: string; username: string };
+  workers: { worker: { _id: string; username: string }; role: string }[];
+  issues: IssueData[];
+  map_3d: FloorplanData;
+}
+
+interface WorkerData {
+  worker: { _id: string; username: string };
+  role: string;
+}
+
+// ---------- Constants ----------
+
+const API_BASE = import.meta.env.VITE_API_URL || "";
+
 const WALL_HEIGHT = 2.6;
 const WALL_THICKNESS = 0.15;
 const WINDOW_SILL = 0.9;
@@ -28,46 +54,34 @@ const WINDOW_WIDTH = 1.0;
 const DOOR_HEIGHT = 2.1;
 
 const ROOM_COLORS = [
-  0xD79B5B, 0xB66A3C, 0x4F8A8B, 0x718355, 0xE6C07B, 0xC97BA5, 0xDFA052,
+  0x4F8A8B, 0x718355, 0x8B6F47, 0x6B5A4E, 0x5A7A6A, 0x7A6A5A, 0x6A5A7A,
 ];
 
-const SAMPLE_DATA = {
-  walls: [
-    { start: [0, 0], end: [10, 0] },
-    { start: [10, 0], end: [10, 8] },
-    { start: [10, 8], end: [0, 8] },
-    { start: [0, 8], end: [0, 0] },
-    { start: [4, 0], end: [4, 8] },
-  ],
-  doors: [
-    { position: [2, 0], width: 1 },
-    { position: [4, 3], width: 0.9 },
-  ],
-  windows: [
-    { wall: 1, position: 3 },
-    { wall: 2, position: 2.5 },
-    { wall: 2, position: 6 },
-  ],
-  rooms: [
-    { name: "Living Room", polygon: [[0, 0], [4, 0], [4, 8], [0, 8]] },
-    { name: "Bedroom", polygon: [[4, 0], [10, 0], [10, 8], [4, 8]] },
-  ],
+const PRIORITY_COLORS = {
+  high: { bg: "#B55442", border: "#E87A6A" },
+  medium: { bg: "#D4A04D", border: "#E8C07B" },
+  low: { bg: "#4F8A8B", border: "#6AAAAA" },
 };
 
-// ---------- Geometry helpers ----------
+const STATUS_ICONS = {
+  open: AlertCircle,
+  in_progress: Circle,
+  resolved: CheckCircle2,
+};
 
-function wallVector(wall) {
+// ---------- Geometry helpers (unchanged) ----------
+
+function wallVector(wall: { start: number[]; end: number[] }) {
   const [sx, sz] = wall.start;
   const [ex, ez] = wall.end;
   const dx = ex - sx;
   const dz = ez - sz;
   const length = Math.hypot(dx, dz);
-  const angle = Math.atan2(dz, dx); // rotation around Y
+  const angle = Math.atan2(dz, dx);
   return { sx, sz, ex, ez, dx, dz, length, angle };
 }
 
-// Distance (and parametric t) of a point projected onto a wall segment
-function projectPointOnWall(point, wall) {
+function projectPointOnWall(point: number[], wall: { start: number[]; end: number[] }) {
   const { sx, sz, dx, dz, length } = wallVector(wall);
   if (length === 0) return { t: 0, distance: Infinity };
   const [px, pz] = point;
@@ -80,170 +94,183 @@ function projectPointOnWall(point, wall) {
   return { t, distance };
 }
 
-// Build solid wall segments (as [t0, t1] intervals along the wall, 0..1)
-// after cutting out door gaps that belong to this wall.
-function computeWallIntervals(wall, wallIndex, doors) {
+function computeWallIntervals(wall: { start: number[]; end: number[] }, _wallIndex: number, doors: { position: number[]; width: number }[]) {
   const { length } = wallVector(wall);
   if (length === 0) return [];
-
-  const gaps = [];
+  const gaps: number[][] = [];
   doors.forEach((door) => {
     const { t, distance } = projectPointOnWall(door.position, wall);
-    // Only treat this door as belonging to the wall if it's close to the
-    // wall line and within the segment bounds.
     if (distance < 0.35 && t > -0.02 && t < 1.02) {
       const halfWidthT = (door.width || 0.9) / 2 / length;
       gaps.push([Math.max(0, t - halfWidthT), Math.min(1, t + halfWidthT)]);
     }
   });
-
   gaps.sort((a, b) => a[0] - b[0]);
-
-  let intervals = [[0, 1]];
+  let intervals: number[][] = [[0, 1]];
   gaps.forEach(([g0, g1]) => {
-    const next = [];
+    const next: number[][] = [];
     intervals.forEach(([i0, i1]) => {
-      if (g1 <= i0 || g0 >= i1) {
-        next.push([i0, i1]);
-        return;
-      }
+      if (g1 <= i0 || g0 >= i1) { next.push([i0, i1]); return; }
       if (g0 > i0) next.push([i0, g0]);
       if (g1 < i1) next.push([g1, i1]);
     });
     intervals = next;
   });
-
   return intervals.filter(([a, b]) => b - a > 0.01);
 }
 
-function buildWallMesh(wall, t0, t1, material) {
+function buildWallMesh(wall: { start: number[]; end: number[] }, t0: number, t1: number, material: THREE.MeshStandardMaterial) {
   const { sx, sz, dx, dz, length, angle } = wallVector(wall);
   const segLength = (t1 - t0) * length;
   if (segLength <= 0) return null;
-
   const geometry = new THREE.BoxGeometry(segLength, WALL_HEIGHT, WALL_THICKNESS);
   const mesh = new THREE.Mesh(geometry, material);
-
   const midT = (t0 + t1) / 2;
-  const midX = sx + midT * dx;
-  const midZ = sz + midT * dz;
-
-  mesh.position.set(midX, WALL_HEIGHT / 2, midZ);
+  mesh.position.set(sx + midT * dx, WALL_HEIGHT / 2, sz + midT * dz);
   mesh.rotation.y = -angle;
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   return mesh;
 }
 
-function buildDoorMesh(door) {
+function buildDoorMesh(door: { position: number[]; width: number }) {
   const geometry = new THREE.BoxGeometry(door.width || 0.9, DOOR_HEIGHT, 0.05);
-  const material = new THREE.MeshStandardMaterial({
-    color: 0x8a5a3a,
-    transparent: true,
-    opacity: 0.85,
-  });
+  const material = new THREE.MeshStandardMaterial({ color: 0x8a5a3a, transparent: true, opacity: 0.85 });
   const mesh = new THREE.Mesh(geometry, material);
-  const [x, z] = door.position;
-  mesh.position.set(x, DOOR_HEIGHT / 2, z);
+  mesh.position.set(door.position[0], DOOR_HEIGHT / 2, door.position[1]);
   return mesh;
 }
 
-function buildWindowMesh(windowDef, walls) {
+function buildWindowMesh(windowDef: { wall: number; position: number }, walls: { start: number[]; end: number[] }[]) {
   const wall = walls[windowDef.wall];
   if (!wall) return null;
   const { sx, sz, dx, dz, length, angle } = wallVector(wall);
   if (length === 0) return null;
-
   const t = windowDef.position / length;
-  const x = sx + t * dx;
-  const z = sz + t * dz;
-
   const geometry = new THREE.BoxGeometry(WINDOW_WIDTH, WINDOW_HEIGHT, WALL_THICKNESS + 0.02);
-  const material = new THREE.MeshPhysicalMaterial({
-    color: 0x4F8A8B,
-    transparent: true,
-    opacity: 0.45,
-    roughness: 0.1,
-    metalness: 0.1,
-  });
+  const material = new THREE.MeshPhysicalMaterial({ color: 0x4F8A8B, transparent: true, opacity: 0.45, roughness: 0.1, metalness: 0.1 });
   const mesh = new THREE.Mesh(geometry, material);
-  mesh.position.set(x, WINDOW_SILL + WINDOW_HEIGHT / 2, z);
+  mesh.position.set(sx + t * dx, WINDOW_SILL + WINDOW_HEIGHT / 2, sz + t * dz);
   mesh.rotation.y = -angle;
   return mesh;
 }
 
-function buildRoomFloor(room, colorHex) {
+function buildRoomFloor(room: { polygon: number[][] }, colorHex: number) {
   const shape = new THREE.Shape();
   room.polygon.forEach(([x, z], i) => {
     if (i === 0) shape.moveTo(x, z);
     else shape.lineTo(x, z);
   });
   shape.closePath();
-
   const geometry = new THREE.ShapeGeometry(shape);
-  const material = new THREE.MeshStandardMaterial({
-    color: colorHex,
-    side: THREE.DoubleSide,
-    roughness: 0.9,
-  });
+  const material = new THREE.MeshStandardMaterial({ color: colorHex, side: THREE.DoubleSide, roughness: 0.9 });
   const mesh = new THREE.Mesh(geometry, material);
-  mesh.rotation.x = -Math.PI / 2; // lay flat on XZ plane
-  mesh.position.y = 0.01; // avoid z-fighting with a base grid
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.y = 0.01;
   mesh.receiveShadow = true;
   return mesh;
 }
 
-function computeBounds(data) {
-  const pts = [];
-  (data.walls || []).forEach((w) => {
-    pts.push(w.start, w.end);
-  });
+function computeBounds(data: FloorplanData) {
+  const pts: number[][] = [];
+  (data.walls || []).forEach((w) => { pts.push(w.start, w.end); });
   (data.rooms || []).forEach((r) => r.polygon.forEach((p) => pts.push(p)));
   if (pts.length === 0) return { cx: 0, cz: 0, radius: 10 };
   const xs = pts.map((p) => p[0]);
   const zs = pts.map((p) => p[1]);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
   const minZ = Math.min(...zs), maxZ = Math.max(...zs);
-  const cx = (minX + maxX) / 2;
-  const cz = (minZ + maxZ) / 2;
-  const radius = Math.max(maxX - minX, maxZ - minZ, 4);
-  return { cx, cz, radius };
+  return { cx: (minX + maxX) / 2, cz: (minZ + maxZ) / 2, radius: Math.max(maxX - minX, maxZ - minZ, 4) };
+}
+
+// ---------- Helper components ----------
+
+function IssueCard({ issue, selected, onClick }: { issue: IssueData; selected: boolean; onClick: () => void }) {
+  const StatusIcon = STATUS_ICONS[issue.status];
+  const priorityColor = PRIORITY_COLORS[issue.priority];
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full text-left px-3 py-2.5 rounded-lg transition flex items-start gap-2.5 ${
+        selected ? "bg-elevated border border-amber/30" : "hover:bg-elevated/60 border border-transparent"
+      }`}
+    >
+      <StatusIcon size={16} className="mt-0.5 shrink-0 text-faded" />
+      <div className="min-w-0 flex-1">
+        <div className="text-sm text-ink truncate">{issue.name}</div>
+        <div className="flex items-center gap-2 mt-1">
+          <span
+            className="text-[10px] font-medium px-1.5 py-0.5 rounded-full"
+            style={{ background: priorityColor.bg + "30", color: priorityColor.border }}
+          >
+            {issue.priority}
+          </span>
+          {issue.assignedTo && (
+            <span className="text-[10px] text-faded truncate">{issue.assignedTo.username}</span>
+          )}
+        </div>
+      </div>
+      <ChevronRight size={14} className="shrink-0 mt-1 text-faded" />
+    </button>
+  );
+}
+
+function formatDate(dateStr: string) {
+  const d = new Date(dateStr);
+  const now = new Date();
+  const diff = now.getTime() - d.getTime();
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+  return `${Math.floor(diff / 86400000)}d ago`;
 }
 
 // ---------- Main component ----------
 
 export default function FloorplanViewer() {
-  const mountRef = useRef(null);
-  const labelLayerRef = useRef(null);
-  const fileInputRef = useRef(null);
+  const mountRef = useRef<HTMLDivElement>(null);
+  const labelLayerRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const three = useRef<any>({});
 
-  const [floorplan, setFloorplan] = useState(SAMPLE_DATA);
-  const [fileName, setFileName] = useState("sample-floorplan.json");
-  const [error, setError] = useState(null);
+  const [project, setProject] = useState<ProjectData | null>(null);
+  const [issues, setIssues] = useState<IssueData[]>([]);
+  const [workers, setWorkers] = useState<WorkerData[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  // Persistent three.js refs so we don't rebuild the renderer every render
-  const three = useRef({});
+  const [selectedIssue, setSelectedIssue] = useState<IssueData | null>(null);
+  const [rightPanel, setRightPanel] = useState<"dashboard" | "issue">("dashboard");
+  const [issueFilter, setIssueFilter] = useState<"all" | "open" | "in_progress" | "resolved">("all");
 
-  const handleFile = useCallback((file) => {
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (e) => {
+  // ---------- API fetch ----------
+
+  useEffect(() => {
+    (async () => {
       try {
-        const parsed = JSON.parse(e.target.result);
-        if (!parsed.walls) throw new Error("JSON must include a 'walls' array");
-        setFloorplan(parsed);
-        setFileName(file.name);
-        setError(null);
-      } catch (err) {
-        setError("Couldn't parse that file: " + err.message);
+        const listRes = await fetch(`${API_BASE}/projects`);
+        const projects = await listRes.json();
+        if (!projects.length) { setLoading(false); return; }
+        const res = await fetch(`${API_BASE}/projects/${projects[0]._id}`);
+        const data: ProjectData = await res.json();
+        setProject(data);
+        setIssues(data.issues || []);
+        setWorkers(data.workers || []);
+      } catch (err: any) {
+        setError("Failed to load project: " + err.message);
+      } finally {
+        setLoading(false);
       }
-    };
-    reader.readAsText(file);
+    })();
   }, []);
 
-  // Set up the three.js scene once
+  const floorplanData = project?.map_3d;
+
+  // ---------- Three.js setup ----------
+
   useEffect(() => {
+    if (loading) return;
     const mount = mountRef.current;
+    if (!mount) return;
     const width = mount.clientWidth;
     const height = mount.clientHeight;
 
@@ -258,8 +285,7 @@ export default function FloorplanViewer() {
     renderer.shadowMap.enabled = true;
     mount.appendChild(renderer.domElement);
 
-    const ambient = new THREE.AmbientLight(0xffffff, 0.55);
-    scene.add(ambient);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.55));
 
     const sun = new THREE.DirectionalLight(0xfff2e0, 0.9);
     sun.position.set(15, 20, 10);
@@ -273,7 +299,6 @@ export default function FloorplanViewer() {
     const modelGroup = new THREE.Group();
     scene.add(modelGroup);
 
-    // --- Minimal orbit-style camera controller (no external deps) ---
     const controls = {
       target: new THREE.Vector3(0, 0, 0),
       radius: 20,
@@ -286,43 +311,30 @@ export default function FloorplanViewer() {
 
     function updateCamera() {
       const { target, radius, azimuth, polar } = controls;
-      const x = target.x + radius * Math.sin(polar) * Math.sin(azimuth);
-      const y = target.y + radius * Math.cos(polar);
-      const z = target.z + radius * Math.sin(polar) * Math.cos(azimuth);
-      camera.position.set(x, y, z);
+      camera.position.set(
+        target.x + radius * Math.sin(polar) * Math.sin(azimuth),
+        target.y + radius * Math.cos(polar),
+        target.z + radius * Math.sin(polar) * Math.cos(azimuth),
+      );
       camera.lookAt(target);
     }
     updateCamera();
 
     const dom = renderer.domElement;
 
-    const onPointerDown = (e) => {
-      controls.dragging = true;
-      controls.lastX = e.clientX;
-      controls.lastY = e.clientY;
-    };
-    const onPointerUp = () => {
-      controls.dragging = false;
-    };
-    const onPointerMove = (e) => {
+    const onPointerDown = (e: PointerEvent) => { controls.dragging = true; controls.lastX = e.clientX; controls.lastY = e.clientY; };
+    const onPointerUp = () => { controls.dragging = false; };
+    const onPointerMove = (e: PointerEvent) => {
       if (!controls.dragging) return;
-      const dx = e.clientX - controls.lastX;
-      const dy = e.clientY - controls.lastY;
+      controls.azimuth -= (e.clientX - controls.lastX) * 0.006;
+      controls.polar = Math.min(Math.max(controls.polar - (e.clientY - controls.lastY) * 0.006, 0.15), Math.PI / 2 - 0.02);
       controls.lastX = e.clientX;
       controls.lastY = e.clientY;
-      controls.azimuth -= dx * 0.006;
-      controls.polar = Math.min(
-        Math.max(controls.polar - dy * 0.006, 0.15),
-        Math.PI / 2 - 0.02
-      );
       updateCamera();
     };
-    const onWheel = (e) => {
+    const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      controls.radius = Math.min(
-        Math.max(controls.radius + e.deltaY * 0.02, 3),
-        120
-      );
+      controls.radius = Math.min(Math.max(controls.radius + e.deltaY * 0.02, 3), 120);
       updateCamera();
     };
 
@@ -332,45 +344,32 @@ export default function FloorplanViewer() {
     dom.addEventListener("wheel", onWheel, { passive: false });
 
     const onResize = () => {
-      const w = mount.clientWidth;
-      const h = mount.clientHeight;
-      camera.aspect = w / h;
+      camera.aspect = mount.clientWidth / mount.clientHeight;
       camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
+      renderer.setSize(mount.clientWidth, mount.clientHeight);
     };
     window.addEventListener("resize", onResize);
 
-    let rafId;
-    const labelData = { current: [] }; // filled in by rebuildModel
+    let rafId: number;
+    const labelData: { current: { el: HTMLElement; position: THREE.Vector3 }[] } = { current: [] };
 
     const animate = () => {
       rafId = requestAnimationFrame(animate);
       renderer.render(scene, camera);
-
-      // Move HTML room-name labels to match projected 3D positions
       const layer = labelLayerRef.current;
       if (layer) {
         labelData.current.forEach(({ el, position }) => {
           const proj = position.clone().project(camera);
           const x = (proj.x * 0.5 + 0.5) * mount.clientWidth;
           const y = (-proj.y * 0.5 + 0.5) * mount.clientHeight;
-          const visible = proj.z < 1;
-          el.style.display = visible ? "block" : "none";
+          el.style.display = proj.z < 1 ? "block" : "none";
           el.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px)`;
         });
       }
     };
     animate();
 
-    three.current = {
-      scene,
-      camera,
-      renderer,
-      modelGroup,
-      controls,
-      updateCamera,
-      labelData,
-    };
+    three.current = { scene, camera, renderer, modelGroup, controls, updateCamera, labelData };
 
     return () => {
       cancelAnimationFrame(rafId);
@@ -382,16 +381,16 @@ export default function FloorplanViewer() {
       renderer.dispose();
       if (mount.contains(dom)) mount.removeChild(dom);
     };
-  }, []);
+  }, [loading]);
 
-  // Rebuild the 3D model whenever the floorplan data changes
+  // ---------- Rebuild model when data changes ----------
+
   useEffect(() => {
     const ctx = three.current;
-    if (!ctx.modelGroup) return;
+    if (!ctx.modelGroup || !floorplanData) return;
 
     const { modelGroup, controls, updateCamera, labelData } = ctx;
 
-    // Clear previous geometry
     while (modelGroup.children.length) {
       const child = modelGroup.children.pop();
       child.geometry?.dispose?.();
@@ -402,25 +401,20 @@ export default function FloorplanViewer() {
     if (layer) layer.innerHTML = "";
     labelData.current = [];
 
-    const walls = floorplan.walls || [];
-    const doors = floorplan.doors || [];
-    const windows = floorplan.windows || [];
-    const rooms = floorplan.rooms || [];
+    const data = floorplanData;
+    const walls = data.walls || [];
+    const doors = data.doors || [];
+    const windows = data.windows || [];
+    const rooms = data.rooms || [];
 
-    const wallMaterial = new THREE.MeshStandardMaterial({
-      color: 0xe8e2d6,
-      roughness: 0.85,
-    });
+    const wallMaterial = new THREE.MeshStandardMaterial({ color: 0xe8e2d6, roughness: 0.85 });
 
-    // Rooms (floors) first so walls sit visually on top
     rooms.forEach((room, i) => {
       const floor = buildRoomFloor(room, ROOM_COLORS[i % ROOM_COLORS.length]);
       modelGroup.add(floor);
-
-      // Room label as an HTML overlay, positioned each frame in the render loop
       if (layer) {
-        const cx = room.polygon.reduce((s, p) => s + p[0], 0) / room.polygon.length;
-        const cz = room.polygon.reduce((s, p) => s + p[1], 0) / room.polygon.length;
+        const cx = room.polygon.reduce((s: number, p: number[]) => s + p[0], 0) / room.polygon.length;
+        const cz = room.polygon.reduce((s: number, p: number[]) => s + p[1], 0) / room.polygon.length;
         const el = document.createElement("div");
         el.textContent = room.name;
         el.style.position = "absolute";
@@ -437,90 +431,415 @@ export default function FloorplanViewer() {
       }
     });
 
-    // Walls, with door gaps cut out
     walls.forEach((wall, i) => {
-      const intervals = computeWallIntervals(wall, i, doors);
-      intervals.forEach(([t0, t1]) => {
+      computeWallIntervals(wall, i, doors).forEach(([t0, t1]) => {
         const mesh = buildWallMesh(wall, t0, t1, wallMaterial);
         if (mesh) modelGroup.add(mesh);
       });
     });
 
-    // Doors (as thin open panels marking the opening)
     doors.forEach((door) => {
       const mesh = buildDoorMesh(door);
-      modelGroup.add(mesh);
+      if (mesh) modelGroup.add(mesh);
     });
 
-    // Windows
     windows.forEach((w) => {
       const mesh = buildWindowMesh(w, walls);
       if (mesh) modelGroup.add(mesh);
     });
 
-    // Frame the camera around the new model
-    const { cx, cz, radius } = computeBounds(floorplan);
+    // Issue pins as 3D sprites
+    const pinCanvas = document.createElement("canvas");
+    pinCanvas.width = 48;
+    pinCanvas.height = 48;
+
+    issues.forEach((issue) => {
+      if (!issue.position) return;
+      const pinCtx = pinCanvas.getContext("2d")!;
+      pinCtx.clearRect(0, 0, 48, 48);
+      const color = PRIORITY_COLORS[issue.priority].bg;
+      const isSelected = selectedIssue?._id === issue._id;
+      pinCtx.beginPath();
+      pinCtx.arc(24, 24, isSelected ? 20 : 16, 0, Math.PI * 2);
+      pinCtx.fillStyle = color;
+      pinCtx.fill();
+      pinCtx.strokeStyle = "#F6E8D5";
+      pinCtx.lineWidth = isSelected ? 3 : 2;
+      pinCtx.stroke();
+      const texture = new THREE.CanvasTexture(pinCanvas);
+      const spriteMat = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
+      const sprite = new THREE.Sprite(spriteMat);
+      sprite.position.set(issue.position.x, 0.5, issue.position.z);
+      sprite.scale.set(0.8, 0.8, 1);
+      modelGroup.add(sprite);
+    });
+
+    const { cx, cz, radius } = computeBounds(data);
     controls.target.set(cx, 0, cz);
     controls.radius = radius * 1.6;
     controls.polar = Math.PI / 3.2;
     controls.azimuth = Math.PI / 4;
     updateCamera();
-  }, [floorplan]);
+  }, [floorplanData, issues, selectedIssue]);
+
+  // ---------- Computed values ----------
+
+  const openIssues = issues.filter((i) => i.status === "open");
+  const inProgressIssues = issues.filter((i) => i.status === "in_progress");
+  const resolvedIssues = issues.filter((i) => i.status === "resolved");
+
+  const filteredIssues = issueFilter === "all"
+    ? issues
+    : issues.filter((i) => i.status === issueFilter);
+
+  const recentActivity = issues
+    .flatMap((i) => i.comments.map((c) => ({ ...c, issueName: i.name, issueId: i._id })))
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .slice(0, 5);
+
+  // ---------- Handlers ----------
+
+  const handleSelectIssue = (issue: IssueData) => {
+    setSelectedIssue(issue);
+    setRightPanel("issue");
+  };
+
+  const handleCloseIssue = () => {
+    setSelectedIssue(null);
+    setRightPanel("dashboard");
+  };
+
+  // ---------- Loading / Error ----------
 
   return (
-    <div className="w-full h-[calc(100vh-67px)] flex flex-col bg-paper text-ink overflow-hidden">
-      {/* Toolbar */}
-      <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-border bg-panel">
-        <div className="flex items-center gap-2 min-w-0">
-          <Move3d size={18} className="text-amber shrink-0" />
+    <div className="h-screen flex flex-col bg-paper text-ink overflow-hidden select-none relative">
+      {/* Loading overlay */}
+      {loading && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-paper">
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-6 h-6 border-2 border-amber border-t-transparent rounded-full animate-spin" />
+            <span className="text-sm text-faded">Loading project...</span>
+          </div>
+        </div>
+      )}
+      {/* Error overlay */}
+      {error && !project && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-paper">
+          <div className="text-center">
+            <FileJson size={32} className="mx-auto mb-2 opacity-50 text-error" />
+            <p className="text-sm text-error">{error}</p>
+          </div>
+        </div>
+      )}
+      {/* ===== Top Toolbar ===== */}
+      <header className="flex items-center justify-between px-4 py-2 border-b border-border bg-panel shrink-0">
+        <div className="flex items-center gap-4 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="font-display text-lg font-bold tracking-wide text-amber">CHISEL</span>
+            <span className="text-border">/</span>
+          </div>
           <div className="min-w-0">
-            <div className="text-sm font-medium truncate text-ink">{fileName}</div>
-            <div className="text-xs text-faded">
-              Drag to orbit &middot; scroll to zoom
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium truncate">{project?.projectName}</span>
+              <span className="text-[10px] text-faded border border-border rounded px-1.5 py-0.5">Blueprint v4</span>
+            </div>
+            <div className="text-[11px] text-faded">
+              Last updated {project ? formatDate(project.issues[0]?.createdAt || new Date().toISOString()) : "-"}
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-md bg-amber text-paper hover:opacity-90 transition"
-          >
-            <Upload size={14} />
-            Upload floorplan JSON
-          </button>
-          <button
-            onClick={() => {
-              setFloorplan(SAMPLE_DATA);
-              setFileName("sample-floorplan.json");
-              setError(null);
-            }}
-            className="flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-md border border-border text-faded hover:bg-elevated transition"
-          >
-            <RotateCcw size={14} />
-            Reset
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="application/json,.json"
-            className="hidden"
-            onChange={(e) => handleFile(e.target.files?.[0])}
-          />
+
+        <div className="hidden md:flex items-center gap-1 bg-paper rounded-lg p-0.5 border border-border">
+          {["Plan", "3D", "Section", "BIM"].map((mode) => (
+            <button
+              key={mode}
+              className={`text-xs font-medium px-3 py-1.5 rounded-md transition ${
+                mode === "3D" ? "bg-amber text-paper" : "text-faded hover:text-ink"
+              }`}
+            >
+              {mode}
+            </button>
+          ))}
         </div>
+
+        <div className="flex items-center gap-1.5">
+          {[
+            { icon: Edit3, label: "Edit" },
+            { icon: Ruler, label: "Measure" },
+            { icon: Layers, label: "Layers" },
+            { icon: Settings, label: "Settings" },
+            { icon: Share2, label: "Share" },
+          ].map(({ icon: Icon, label }) => (
+            <button
+              key={label}
+              className="flex items-center gap-1.5 text-xs text-faded hover:text-ink px-2 py-1.5 rounded-md hover:bg-elevated transition"
+            >
+              <Icon size={14} />
+              <span className="hidden lg:inline">{label}</span>
+            </button>
+          ))}
+        </div>
+      </header>
+
+      {/* ===== Main area ===== */}
+      <div className="flex flex-1 overflow-hidden">
+
+        {/* ===== Left Sidebar - Issues ===== */}
+        <aside className="w-72 shrink-0 border-r border-border bg-panel flex flex-col overflow-hidden">
+          <div className="p-3 border-b border-border">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold text-ink">Issues ({issues.length})</h2>
+              <button className="flex items-center gap-1 text-xs font-medium text-amber hover:opacity-80 transition">
+                <Plus size={14} />
+                New
+              </button>
+            </div>
+            <div className="flex gap-1">
+              {[
+                { key: "all", label: "All", count: issues.length },
+                { key: "open", label: "Open", count: openIssues.length },
+                { key: "in_progress", label: "In Progress", count: inProgressIssues.length },
+                { key: "resolved", label: "Resolved", count: resolvedIssues.length },
+              ].map(({ key, label, count }) => (
+                <button
+                  key={key}
+                  onClick={() => setIssueFilter(key as any)}
+                  className={`flex-1 text-[11px] font-medium py-1.5 rounded-md transition ${
+                    issueFilter === key
+                      ? "bg-amber/20 text-amber"
+                      : "text-faded hover:text-ink hover:bg-elevated"
+                  }`}
+                >
+                  {label}
+                  <span className="ml-1 opacity-60">{count}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-2 space-y-1">
+            {filteredIssues.length === 0 && (
+              <div className="text-center py-8 text-faded text-xs">No issues match this filter.</div>
+            )}
+            {filteredIssues.map((issue) => (
+              <IssueCard
+                key={issue._id}
+                issue={issue}
+                selected={selectedIssue?._id === issue._id}
+                onClick={() => handleSelectIssue(issue)}
+              />
+            ))}
+          </div>
+
+          <div className="p-2 border-t border-border">
+            <button className="flex items-center gap-2 w-full text-xs text-faded hover:text-ink px-2 py-1.5 rounded-md hover:bg-elevated transition">
+              <Filter size={14} />
+              Filters — Discipline, Priority, Assigned, Status
+            </button>
+          </div>
+        </aside>
+
+        {/* ===== 3D Viewport ===== */}
+        <main className="flex-1 relative">
+          <div ref={mountRef} className="absolute inset-0" />
+          <div ref={labelLayerRef} className="absolute inset-0 pointer-events-none z-10" />
+
+          {/* Floating controls */}
+          <div className="absolute top-3 right-3 z-20 flex flex-col gap-1">
+            {[
+              { icon: Edit3, label: "Annotate" },
+              { icon: Ruler, label: "Measure" },
+              { icon: Grid3x3, label: "Explode" },
+              { icon: Layers, label: "Layers" },
+            ].map(({ icon: Icon, label }) => (
+              <button
+                key={label}
+                title={label}
+                className="w-8 h-8 flex items-center justify-center rounded-md bg-panel/80 backdrop-blur border border-border text-faded hover:text-ink hover:bg-elevated transition text-xs"
+              >
+                <Icon size={15} />
+              </button>
+            ))}
+          </div>
+
+          <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1 bg-panel/80 backdrop-blur rounded-lg px-2 py-1 border border-border">
+            {["Orbit", "Walk", "Top", "Perspective"].map((mode) => (
+              <button
+                key={mode}
+                className={`text-[11px] font-medium px-2.5 py-1 rounded-md transition ${
+                  mode === "Orbit" ? "bg-amber/20 text-amber" : "text-faded hover:text-ink"
+                }`}
+              >
+                {mode}
+              </button>
+            ))}
+          </div>
+
+          <div className="absolute bottom-3 left-3 z-20 flex flex-col gap-1 bg-panel/80 backdrop-blur rounded-lg p-2 border border-border">
+            <label className="flex items-center gap-2 text-[11px] text-faded cursor-pointer">
+              <input type="checkbox" defaultChecked className="accent-amber" /> Walls
+            </label>
+            <label className="flex items-center gap-2 text-[11px] text-faded cursor-pointer">
+              <input type="checkbox" defaultChecked className="accent-amber" /> Doors
+            </label>
+            <label className="flex items-center gap-2 text-[11px] text-faded cursor-pointer">
+              <input type="checkbox" defaultChecked className="accent-amber" /> Windows
+            </label>
+          </div>
+        </main>
+
+        {/* ===== Right Panel ===== */}
+        <aside className="w-80 shrink-0 border-l border-border bg-panel flex flex-col overflow-hidden">
+          {rightPanel === "dashboard" && (
+            <div className="flex-1 overflow-y-auto">
+              <div className="p-4 border-b border-border">
+                <h2 className="text-sm font-semibold text-ink mb-3">Project Progress</h2>
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="flex-1 h-2 rounded-full bg-elevated overflow-hidden">
+                    <div className="h-full rounded-full bg-amber" style={{ width: "62%" }} />
+                  </div>
+                  <span className="text-sm font-semibold text-amber">62%</span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-px bg-border">
+                {[
+                  { label: "Issues", value: issues.length, color: "text-amber" },
+                  { label: "Open", value: openIssues.length, color: "text-error" },
+                  { label: "Workers", value: workers.length, color: "text-teal" },
+                  { label: "Resolved", value: resolvedIssues.length, color: "text-success" },
+                ].map((stat) => (
+                  <div key={stat.label} className="bg-panel p-3">
+                    <div className={`text-lg font-bold ${stat.color}`}>{stat.value}</div>
+                    <div className="text-[11px] text-faded">{stat.label}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="p-4">
+                <h3 className="text-xs font-semibold text-ink mb-3 flex items-center gap-1.5">
+                  <Clock size={13} />
+                  Recent Activity
+                </h3>
+                <div className="space-y-2.5">
+                  {recentActivity.length === 0 && (
+                    <p className="text-xs text-faded">No recent activity.</p>
+                  )}
+                  {recentActivity.map((comment, i) => (
+                    <div key={i} className="flex items-start gap-2">
+                      <div className="w-5 h-5 rounded-full bg-elevated flex items-center justify-center shrink-0 mt-0.5">
+                        <User size={10} className="text-faded" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-[11px] text-ink leading-tight">
+                          <span className="font-medium">{comment.author.username}</span>
+                          {" commented on "}
+                          <span className="text-faded">{comment.issueName}</span>
+                        </p>
+                        <p className="text-[10px] text-faded mt-0.5">{formatDate(comment.createdAt)}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {rightPanel === "issue" && selectedIssue && (
+            <div className="flex-1 overflow-y-auto">
+              <div className="p-4 border-b border-border">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] font-mono text-faded">#{selectedIssue._id.slice(-6).toUpperCase()}</span>
+                  <button onClick={handleCloseIssue} className="text-faded hover:text-ink text-xs">Close</button>
+                </div>
+                <h3 className="text-sm font-semibold text-ink mb-2">{selectedIssue.name}</h3>
+                <div className="flex items-center gap-2 mb-2">
+                  <span
+                    className="text-[10px] font-medium px-1.5 py-0.5 rounded-full"
+                    style={{ background: PRIORITY_COLORS[selectedIssue.priority].bg + "30", color: PRIORITY_COLORS[selectedIssue.priority].border }}
+                  >
+                    {selectedIssue.priority}
+                  </span>
+                  <span className="text-[10px] text-faded capitalize">{selectedIssue.status.replace("_", " ")}</span>
+                </div>
+                <p className="text-xs text-faded leading-relaxed">{selectedIssue.description}</p>
+                <div className="flex items-center gap-3 mt-3 text-[11px] text-faded">
+                  <span>Opened by <span className="text-ink">{selectedIssue.openedBy.username}</span></span>
+                  {selectedIssue.assignedTo && (
+                    <span>Assigned to <span className="text-ink">{selectedIssue.assignedTo.username}</span></span>
+                  )}
+                </div>
+              </div>
+
+              <div className="p-4">
+                <h4 className="text-xs font-semibold text-ink mb-3 flex items-center gap-1.5">
+                  <MessageSquare size={13} />
+                  Comments ({selectedIssue.comments.length})
+                </h4>
+                <div className="space-y-3">
+                  {selectedIssue.comments.map((comment, i) => (
+                    <div key={i} className="flex items-start gap-2">
+                      <div className="w-6 h-6 rounded-full bg-elevated flex items-center justify-center shrink-0 mt-0.5">
+                        <User size={11} className="text-faded" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-medium text-ink">{comment.author.username}</span>
+                          <span className="text-[10px] text-faded">{formatDate(comment.createdAt)}</span>
+                        </div>
+                        <p className="text-xs text-faded mt-0.5">{comment.content}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </aside>
       </div>
 
-      {error && (
-        <div className="px-4 py-2 text-xs bg-error/20 text-error flex items-center gap-2">
-          <FileJson size={14} />
-          {error}
-        </div>
-      )}
+      {/* ===== Bottom Bar ===== */}
+      <footer className="border-t border-border bg-panel shrink-0">
+        <div className="flex items-center px-4 py-2 gap-6">
+          <div className="flex items-center gap-3 flex-1">
+            {[
+              { label: "Foundation", pct: 100, status: "Done" },
+              { label: "Structure", pct: 65, status: "In Progress" },
+              { label: "MEP", pct: 20, status: "Pending" },
+              { label: "Finishing", pct: 0, status: "Pending" },
+            ].map((stage) => (
+              <div key={stage.label} className="flex items-center gap-2 min-w-0">
+                <div className="w-16 h-1.5 rounded-full bg-elevated overflow-hidden shrink-0">
+                  <div
+                    className={`h-full rounded-full transition-all ${
+                      stage.pct === 100 ? "bg-success" : stage.pct > 0 ? "bg-amber" : "bg-border"
+                    }`}
+                    style={{ width: `${stage.pct}%` }}
+                  />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-[11px] font-medium text-ink truncate">{stage.label}</div>
+                  <div className="text-[10px] text-faded">{stage.status}</div>
+                </div>
+              </div>
+            ))}
+          </div>
 
-      {/* 3D viewport */}
-      <div className="relative flex-1">
-        <div ref={mountRef} className="absolute inset-0" />
-        <div ref={labelLayerRef} className="absolute inset-0 pointer-events-none" />
-      </div>
+          <div className="flex items-center gap-1 border-l border-border pl-4">
+            <span className="text-[11px] text-faded mr-1">Version</span>
+            {["v1", "v2", "v3", "v4"].map((v) => (
+              <button
+                key={v}
+                className={`text-[11px] font-medium px-2 py-0.5 rounded ${
+                  v === "v4" ? "bg-amber/20 text-amber" : "text-faded hover:text-ink"
+                }`}
+              >
+                {v}
+              </button>
+            ))}
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }
