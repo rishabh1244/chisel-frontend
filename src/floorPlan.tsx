@@ -248,6 +248,7 @@ export default function FloorplanViewer() {
     (async () => {
       try {
         const listRes = await fetch(`${API_BASE}/projects`);
+        console.log(`${API_BASE}/projects`)
         const projects = await listRes.json();
         if (!projects.length) { setLoading(false); return; }
         const res = await fetch(`${API_BASE}/projects/${projects[0]._id}`);
