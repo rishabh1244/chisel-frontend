@@ -11,9 +11,11 @@
   },
   "dependencies": {
     "@tabler/icons-react": "^3.44.0",
+    "konva": "^10.3.0",
     "lucide-react": "^1.23.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
+    "react-konva": "^19.2.5",
     "react-router-dom": "^7.18.1",
     "three": "^0.185.1"
   },
