@@ -14,32 +14,42 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 function AppLayout() {
   const location = useLocation()
-  const isFloorplan = location.pathname === "/floorplan"
+  const hideNav = ["/floorplan", "/project/", "/projects/"].some((p) =>
+    location.pathname.startsWith(p),
+  )
 
   return (
     <div className="min-h-screen bg-[#1A1714] text-[#F4EFE7]">
-      {!isFloorplan && <Navbar />}
-<Routes>
-          <Route path="/" element={<Hero />} />
-          <Route path="/signin" element={<SignIn />} />
-          <Route
-            path="/dashboard"
-            element={
-              <ProtectedRoute>
-                <Dashboard />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/project/:projectId"
-            element={
-              <ProtectedRoute>
-                <ProjectDetail />
-              </ProtectedRoute>
-            }
-          />
-          <Route path="/floorplan" element={<FloorplanViewer />} />
-        </Routes>
+      {!hideNav && <Navbar />}
+      <Routes>
+        <Route path="/" element={<Hero />} />
+        <Route path="/signin" element={<SignIn />} />
+        <Route
+          path="/dashboard"
+          element={
+            <ProtectedRoute>
+              <Dashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/project/:projectId"
+          element={
+            <ProtectedRoute>
+              <ProjectDetail />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/projects/:projectId"
+          element={
+            <ProtectedRoute>
+              <ProjectDetail />
+            </ProtectedRoute>
+          }
+        />
+        <Route path="/floorplan" element={<FloorplanViewer />} />
+      </Routes>
     </div>
   )
 }
