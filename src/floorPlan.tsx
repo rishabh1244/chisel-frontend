@@ -226,7 +226,7 @@ function formatDate(dateStr: string) {
 
 // ---------- Main component ----------
 
-export default function FloorplanViewer() {
+export default function FloorplanViewer({ projectId, projectName }: { projectId?: string; projectName?: string }) {
   const mountRef = useRef<HTMLDivElement>(null);
   const labelLayerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -242,27 +242,145 @@ export default function FloorplanViewer() {
   const [rightPanel, setRightPanel] = useState<"dashboard" | "issue">("dashboard");
   const [issueFilter, setIssueFilter] = useState<"all" | "open" | "in_progress" | "resolved">("all");
 
+  // ---------- Demo fallback data ----------
+
+  const DEMO_PROJECT: ProjectData = {
+    _id: "demo-riverside",
+    projectName: projectName || "Riverside Housing Complex",
+    headOfConstruction: { _id: "u1", username: "Sarah Parker" },
+    workers: [
+      { worker: { _id: "u1", username: "Sarah Parker" }, role: "Head of Construction" },
+      { worker: { _id: "u2", username: "Mike Johnson" }, role: "Structural Engineer" },
+      { worker: { _id: "u3", username: "Raj Kumar" }, role: "Site Foreman" },
+      { worker: { _id: "u4", username: "Lisa Chen" }, role: "Electrical Lead" },
+      { worker: { _id: "u5", username: "Tom Rivera" }, role: "Plumbing Contractor" },
+    ],
+    issues: [
+      {
+        _id: "i1", name: "Foundation crack in Unit B3", description: "Hairline crack observed along the north wall foundation. Needs structural assessment before proceeding with framing.",
+        status: "open", priority: "high",
+        openedBy: { _id: "u3", username: "Raj Kumar" },
+        assignedTo: { _id: "u2", username: "Mike Johnson" },
+        position: { x: 2, z: 3 },
+        comments: [
+          { author: { _id: "u2", username: "Mike Johnson" }, content: "Inspected the crack. It's approximately 2mm wide. Recommending epoxy injection.", createdAt: new Date(Date.now() - 3600000).toISOString() },
+          { author: { _id: "u1", username: "Sarah Parker" }, content: "Let's get a third-party assessment as well before proceeding.", createdAt: new Date(Date.now() - 1800000).toISOString() },
+        ],
+        createdAt: new Date(Date.now() - 86400000).toISOString(),
+      },
+      {
+        _id: "i2", name: "Electrical conduit misalignment - Floor 2", description: "Conduit routing doesn't match the updated MEP drawings. Needs rerouting before drywall.",
+        status: "in_progress", priority: "medium",
+        openedBy: { _id: "u4", username: "Lisa Chen" },
+        assignedTo: { _id: "u4", username: "Lisa Chen" },
+        position: { x: 6, z: 1 },
+        comments: [
+          { author: { _id: "u4", username: "Lisa Chen" }, content: "Rerouting in progress. ETA 2 days.", createdAt: new Date(Date.now() - 7200000).toISOString() },
+        ],
+        createdAt: new Date(Date.now() - 172800000).toISOString(),
+      },
+      {
+        _id: "i3", name: "Window frame delivery delay", description: "Supplier confirmed 1-week delay on custom window frames for Units A1–A4.",
+        status: "open", priority: "medium",
+        openedBy: { _id: "u1", username: "Sarah Parker" },
+        position: { x: 0, z: 5 },
+        comments: [],
+        createdAt: new Date(Date.now() - 43200000).toISOString(),
+      },
+      {
+        _id: "i4", name: "Plumbing inspection passed - Block A", description: "City inspector approved all rough-in plumbing for Block A.",
+        status: "resolved", priority: "low",
+        openedBy: { _id: "u5", username: "Tom Rivera" },
+        assignedTo: { _id: "u5", username: "Tom Rivera" },
+        position: { x: -2, z: 2 },
+        comments: [
+          { author: { _id: "u5", username: "Tom Rivera" }, content: "All clear. Certificate filed.", createdAt: new Date(Date.now() - 259200000).toISOString() },
+        ],
+        createdAt: new Date(Date.now() - 604800000).toISOString(),
+      },
+      {
+        _id: "i5", name: "HVAC ductwork noise in Unit C1", description: "Residents reporting rattling noise from HVAC ductwork. Possibly loose mounting brackets.",
+        status: "open", priority: "high",
+        openedBy: { _id: "u3", username: "Raj Kumar" },
+        position: { x: 8, z: 4 },
+        comments: [],
+        createdAt: new Date(Date.now() - 21600000).toISOString(),
+      },
+    ],
+    map_3d: {
+      walls: [
+        // Outer walls - main building
+        { start: [-4, -2], end: [10, -2] },
+        { start: [10, -2], end: [10, 8] },
+        { start: [10, 8], end: [-4, 8] },
+        { start: [-4, 8], end: [-4, -2] },
+        // Interior walls
+        { start: [3, -2], end: [3, 8] },    // vertical divider
+        { start: [-4, 3], end: [3, 3] },     // horizontal left section
+        { start: [3, 5], end: [10, 5] },      // horizontal right section
+        { start: [6, -2], end: [6, 5] },      // right vertical divider
+      ],
+      doors: [
+        { position: [3, 1], width: 0.9 },
+        { position: [3, 6], width: 0.9 },
+        { position: [6, 2], width: 0.9 },
+        { position: [5, 5], width: 0.9 },
+        { position: [-0.5, 3], width: 0.9 },
+        { position: [8, 5], width: 1.2 },
+      ],
+      windows: [
+        { wall: 0, position: 3 },
+        { wall: 0, position: 8 },
+        { wall: 1, position: 3 },
+        { wall: 1, position: 7 },
+        { wall: 2, position: 4 },
+        { wall: 2, position: 10 },
+        { wall: 3, position: 3 },
+        { wall: 3, position: 7 },
+      ],
+      rooms: [
+        { name: "Living Room", polygon: [[-4, -2], [3, -2], [3, 3], [-4, 3]] },
+        { name: "Kitchen", polygon: [[-4, 3], [3, 3], [3, 8], [-4, 8]] },
+        { name: "Bedroom 1", polygon: [[3, -2], [6, -2], [6, 5], [3, 5]] },
+        { name: "Bedroom 2", polygon: [[6, -2], [10, -2], [10, 5], [6, 5]] },
+        { name: "Bathroom", polygon: [[3, 5], [10, 5], [10, 8], [3, 8]] },
+      ],
+    },
+  };
+
   // ---------- API fetch ----------
 
   useEffect(() => {
     (async () => {
       try {
-        const listRes = await fetch(`${API_BASE}/projects`);
-        console.log(`${API_BASE}/projects`)
-        const projects = await listRes.json();
-        if (!projects.length) { setLoading(false); return; }
-        const res = await fetch(`${API_BASE}/projects/${projects[0]._id}`);
-        const data: ProjectData = await res.json();
-        setProject(data);
-        setIssues(data.issues || []);
-        setWorkers(data.workers || []);
+        if (projectId) {
+          const res = await fetch(`${API_BASE}/projects/${projectId}`);
+          const data: ProjectData = await res.json();
+          setProject(data);
+          setIssues(data.issues || []);
+          setWorkers(data.workers || []);
+        } else {
+          const listRes = await fetch(`${API_BASE}/projects`);
+          console.log(`${API_BASE}/projects`)
+          const projects = await listRes.json();
+          if (!projects.length) { setLoading(false); return; }
+          const res = await fetch(`${API_BASE}/projects/${projects[0]._id}`);
+          const data: ProjectData = await res.json();
+          setProject(data);
+          setIssues(data.issues || []);
+          setWorkers(data.workers || []);
+        }
       } catch (err: any) {
-        setError("Failed to load project: " + err.message);
+        // Fallback to demo data when API is unavailable
+        console.warn("API unavailable, using demo data:", err.message);
+        setProject(DEMO_PROJECT);
+        setIssues(DEMO_PROJECT.issues);
+        setWorkers(DEMO_PROJECT.workers);
       } finally {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [projectId]);
 
   const floorplanData = project?.map_3d;
 
@@ -541,7 +659,7 @@ export default function FloorplanViewer() {
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <span className="text-sm font-medium truncate">{project?.projectName}</span>
+              <span className="text-sm font-medium truncate">{project?.projectName || projectName}</span>
               <span className="text-[10px] text-faded border border-border rounded px-1.5 py-0.5">Blueprint v4</span>
             </div>
             <div className="text-[11px] text-faded">

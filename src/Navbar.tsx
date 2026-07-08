@@ -1,3 +1,5 @@
+import { Link } from "react-router-dom"
+
 export default function Navbar() {
   return (
     <nav
@@ -28,14 +30,14 @@ export default function Navbar() {
 
         <div className="hidden items-center gap-12 md:flex">
           {[
-            "Projects",
-            "Blueprints",
-            "Workers",
-            "Issues",
+            { label: "Projects", href: "/dashboard" },
+            { label: "Blueprints", href: "/floorplan" },
+            { label: "Workers", href: "#" },
+            { label: "Issues", href: "#" },
           ].map((item) => (
             <a
-              key={item}
-              href="#"
+              key={item.label}
+              href={item.href}
               className="
                 relative
                 font-body
@@ -46,28 +48,30 @@ export default function Navbar() {
                 hover:text-amber
               "
             >
-              {item}
+              {item.label}
             </a>
           ))}
         </div>
 
         <div className="flex items-center gap-4">
-          <button
-            className="
-              bg-amber
-              px-7 py-2
-              font-body
-              text-lg
-              font-semibold
-              text-paper
-              transition-all
-              duration-200
-              hover:bg-copper
-              hover:scale-105
-            "
-          >
-            Get Started
-          </button>
+          <Link to="/signin">
+            <button
+              className="
+                bg-amber
+                px-7 py-2
+                font-body
+                text-lg
+                font-semibold
+                text-paper
+                transition-all
+                duration-200
+                hover:bg-copper
+                hover:scale-105
+              "
+            >
+              Get Started
+            </button>
+          </Link>
         </div>
       </div>
     </nav>

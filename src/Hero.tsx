@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom"
 import bg from "../assets/bg.png";
 
 export default function Hero() {
@@ -38,6 +39,25 @@ export default function Hero() {
             work, manage teams, and build a complete history of every change
             made on-site.
           </p>
+
+          <div className="mt-10 flex justify-center">
+            <Link to="/signin">
+              <button className="
+                bg-amber
+                px-10 py-4
+                font-body
+                text-lg
+                font-semibold
+                text-paper
+                transition-all
+                duration-200
+                hover:bg-copper
+                hover:scale-105
+              ">
+                Get Started
+              </button>
+            </Link>
+          </div>
         </div>
       </div>
 
