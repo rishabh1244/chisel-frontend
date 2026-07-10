@@ -5,42 +5,9 @@ import {
   Layers, Settings, Share2, Edit3, Ruler, Grid3x3, Plus, Filter,
   ChevronRight, ChevronDown, Clock, MessageSquare, User, Pin,
 } from "lucide-react";
+import { getProjectData } from "./data/projectData";
+import type { FloorplanData, IssueData, ProjectData, WorkerData } from "./data/projectData";
 
-// ---------- Types ----------
-
-interface FloorplanData {
-  walls: { start: number[]; end: number[] }[];
-  doors: { position: number[]; width: number }[];
-  windows: { wall: number; position: number }[];
-  rooms: { name: string; polygon: number[][] }[];
-}
-
-interface IssueData {
-  _id: string;
-  name: string;
-  description: string;
-  status: "open" | "in_progress" | "resolved";
-  priority: "low" | "medium" | "high";
-  openedBy: { _id: string; username: string };
-  assignedTo?: { _id: string; username: string };
-  position?: { x: number; z: number };
-  comments: { author: { _id: string; username: string }; content: string; createdAt: string }[];
-  createdAt: string;
-}
-
-interface ProjectData {
-  _id: string;
-  projectName: string;
-  headOfConstruction: { _id: string; username: string };
-  workers: { worker: { _id: string; username: string }; role: string }[];
-  issues: IssueData[];
-  map_3d: FloorplanData;
-}
-
-interface WorkerData {
-  worker: { _id: string; username: string };
-  role: string;
-}
 
 // ---------- Constants ----------
 
@@ -242,140 +209,63 @@ export default function FloorplanViewer({ projectId, projectName }: { projectId?
   const [rightPanel, setRightPanel] = useState<"dashboard" | "issue">("dashboard");
   const [issueFilter, setIssueFilter] = useState<"all" | "open" | "in_progress" | "resolved">("all");
 
+  const [viewMode, setViewMode] = useState<"Plan" | "3D" | "Section" | "BIM">("3D");
+  const [cameraMode, setCameraMode] = useState<"Orbit" | "Walk" | "Top" | "Perspective">("Orbit");
+  const [showWalls, setShowWalls] = useState(true);
+  const [showDoors, setShowDoors] = useState(true);
+  const [showWindows, setShowWindows] = useState(true);
+  const [activeVersion, setActiveVersion] = useState("v4");
+  const [showNewIssueForm, setShowNewIssueForm] = useState(false);
+  const [newIssueName, setNewIssueName] = useState("");
+  const [newIssueDescription, setNewIssueDescription] = useState("");
+  const [newIssuePriority, setNewIssuePriority] = useState<"low" | "medium" | "high">("medium");
+  const [editMode, setEditMode] = useState(false);
+  const [measureMode, setMeasureMode] = useState(false);
+  const [annotateMode, setAnnotateMode] = useState(false);
+  const [explodeMode, setExplodeMode] = useState(false);
+  const [showLayersPanel, setShowLayersPanel] = useState(false);
+  const [showSettingsPanel, setShowSettingsPanel] = useState(false);
+  const [showSharePanel, setShowSharePanel] = useState(false);
+  const [showFilterPanel, setShowFilterPanel] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [showGrid, setShowGrid] = useState(true);
+  const [showShadows, setShowShadows] = useState(true);
+
   // ---------- Demo fallback data ----------
 
-  const DEMO_PROJECT: ProjectData = {
-    _id: "demo-riverside",
-    projectName: projectName || "Riverside Housing Complex",
-    headOfConstruction: { _id: "u1", username: "Sarah Parker" },
-    workers: [
-      { worker: { _id: "u1", username: "Sarah Parker" }, role: "Head of Construction" },
-      { worker: { _id: "u2", username: "Mike Johnson" }, role: "Structural Engineer" },
-      { worker: { _id: "u3", username: "Raj Kumar" }, role: "Site Foreman" },
-      { worker: { _id: "u4", username: "Lisa Chen" }, role: "Electrical Lead" },
-      { worker: { _id: "u5", username: "Tom Rivera" }, role: "Plumbing Contractor" },
-    ],
-    issues: [
-      {
-        _id: "i1", name: "Foundation crack in Unit B3", description: "Hairline crack observed along the north wall foundation. Needs structural assessment before proceeding with framing.",
-        status: "open", priority: "high",
-        openedBy: { _id: "u3", username: "Raj Kumar" },
-        assignedTo: { _id: "u2", username: "Mike Johnson" },
-        position: { x: 2, z: 3 },
-        comments: [
-          { author: { _id: "u2", username: "Mike Johnson" }, content: "Inspected the crack. It's approximately 2mm wide. Recommending epoxy injection.", createdAt: new Date(Date.now() - 3600000).toISOString() },
-          { author: { _id: "u1", username: "Sarah Parker" }, content: "Let's get a third-party assessment as well before proceeding.", createdAt: new Date(Date.now() - 1800000).toISOString() },
-        ],
-        createdAt: new Date(Date.now() - 86400000).toISOString(),
-      },
-      {
-        _id: "i2", name: "Electrical conduit misalignment - Floor 2", description: "Conduit routing doesn't match the updated MEP drawings. Needs rerouting before drywall.",
-        status: "in_progress", priority: "medium",
-        openedBy: { _id: "u4", username: "Lisa Chen" },
-        assignedTo: { _id: "u4", username: "Lisa Chen" },
-        position: { x: 6, z: 1 },
-        comments: [
-          { author: { _id: "u4", username: "Lisa Chen" }, content: "Rerouting in progress. ETA 2 days.", createdAt: new Date(Date.now() - 7200000).toISOString() },
-        ],
-        createdAt: new Date(Date.now() - 172800000).toISOString(),
-      },
-      {
-        _id: "i3", name: "Window frame delivery delay", description: "Supplier confirmed 1-week delay on custom window frames for Units A1–A4.",
-        status: "open", priority: "medium",
-        openedBy: { _id: "u1", username: "Sarah Parker" },
-        position: { x: 0, z: 5 },
-        comments: [],
-        createdAt: new Date(Date.now() - 43200000).toISOString(),
-      },
-      {
-        _id: "i4", name: "Plumbing inspection passed - Block A", description: "City inspector approved all rough-in plumbing for Block A.",
-        status: "resolved", priority: "low",
-        openedBy: { _id: "u5", username: "Tom Rivera" },
-        assignedTo: { _id: "u5", username: "Tom Rivera" },
-        position: { x: -2, z: 2 },
-        comments: [
-          { author: { _id: "u5", username: "Tom Rivera" }, content: "All clear. Certificate filed.", createdAt: new Date(Date.now() - 259200000).toISOString() },
-        ],
-        createdAt: new Date(Date.now() - 604800000).toISOString(),
-      },
-      {
-        _id: "i5", name: "HVAC ductwork noise in Unit C1", description: "Residents reporting rattling noise from HVAC ductwork. Possibly loose mounting brackets.",
-        status: "open", priority: "high",
-        openedBy: { _id: "u3", username: "Raj Kumar" },
-        position: { x: 8, z: 4 },
-        comments: [],
-        createdAt: new Date(Date.now() - 21600000).toISOString(),
-      },
-    ],
-    map_3d: {
-      walls: [
-        // Outer walls - main building
-        { start: [-4, -2], end: [10, -2] },
-        { start: [10, -2], end: [10, 8] },
-        { start: [10, 8], end: [-4, 8] },
-        { start: [-4, 8], end: [-4, -2] },
-        // Interior walls
-        { start: [3, -2], end: [3, 8] },    // vertical divider
-        { start: [-4, 3], end: [3, 3] },     // horizontal left section
-        { start: [3, 5], end: [10, 5] },      // horizontal right section
-        { start: [6, -2], end: [6, 5] },      // right vertical divider
-      ],
-      doors: [
-        { position: [3, 1], width: 0.9 },
-        { position: [3, 6], width: 0.9 },
-        { position: [6, 2], width: 0.9 },
-        { position: [5, 5], width: 0.9 },
-        { position: [-0.5, 3], width: 0.9 },
-        { position: [8, 5], width: 1.2 },
-      ],
-      windows: [
-        { wall: 0, position: 3 },
-        { wall: 0, position: 8 },
-        { wall: 1, position: 3 },
-        { wall: 1, position: 7 },
-        { wall: 2, position: 4 },
-        { wall: 2, position: 10 },
-        { wall: 3, position: 3 },
-        { wall: 3, position: 7 },
-      ],
-      rooms: [
-        { name: "Living Room", polygon: [[-4, -2], [3, -2], [3, 3], [-4, 3]] },
-        { name: "Kitchen", polygon: [[-4, 3], [3, 3], [3, 8], [-4, 8]] },
-        { name: "Bedroom 1", polygon: [[3, -2], [6, -2], [6, 5], [3, 5]] },
-        { name: "Bedroom 2", polygon: [[6, -2], [10, -2], [10, 5], [6, 5]] },
-        { name: "Bathroom", polygon: [[3, 5], [10, 5], [10, 8], [3, 8]] },
-      ],
-    },
-  };
+  const DEMO_PROJECT = getProjectData(projectId || "2");
 
   // ---------- API fetch ----------
 
   useEffect(() => {
     (async () => {
       try {
-        if (projectId) {
+        if (projectId && API_BASE) {
           const res = await fetch(`${API_BASE}/projects/${projectId}`);
-          const data: ProjectData = await res.json();
+          const data = await res.json() as ProjectData;
+          setProject(data);
+          setIssues(data.issues || []);
+          setWorkers(data.workers || []);
+        } else if (API_BASE) {
+          const listRes = await fetch(`${API_BASE}/projects`);
+          const projects = await listRes.json();
+          if (!projects.length) { setLoading(false); return; }
+          const res = await fetch(`${API_BASE}/projects/${projects[0]._id}`);
+          const data = await res.json() as ProjectData;
           setProject(data);
           setIssues(data.issues || []);
           setWorkers(data.workers || []);
         } else {
-          const listRes = await fetch(`${API_BASE}/projects`);
-          console.log(`${API_BASE}/projects`)
-          const projects = await listRes.json();
-          if (!projects.length) { setLoading(false); return; }
-          const res = await fetch(`${API_BASE}/projects/${projects[0]._id}`);
-          const data: ProjectData = await res.json();
-          setProject(data);
-          setIssues(data.issues || []);
-          setWorkers(data.workers || []);
+          throw new Error("No API configured");
         }
       } catch (err: any) {
         // Fallback to demo data when API is unavailable
         console.warn("API unavailable, using demo data:", err.message);
-        setProject(DEMO_PROJECT);
-        setIssues(DEMO_PROJECT.issues);
-        setWorkers(DEMO_PROJECT.workers);
+        if (DEMO_PROJECT) {
+          setProject(DEMO_PROJECT);
+          setIssues(DEMO_PROJECT.issues);
+          setWorkers(DEMO_PROJECT.workers);
+        }
       } finally {
         setLoading(false);
       }
@@ -530,10 +420,11 @@ export default function FloorplanViewer({ projectId, projectName }: { projectId?
 
     rooms.forEach((room, i) => {
       const floor = buildRoomFloor(room, ROOM_COLORS[i % ROOM_COLORS.length]);
+      const cx = room.polygon.reduce((s: number, p: number[]) => s + p[0], 0) / room.polygon.length;
+      const cz = room.polygon.reduce((s: number, p: number[]) => s + p[1], 0) / room.polygon.length;
+      floor.userData = { type: 'room', cx, cz, origX: floor.position.x, origZ: floor.position.z };
       modelGroup.add(floor);
       if (layer) {
-        const cx = room.polygon.reduce((s: number, p: number[]) => s + p[0], 0) / room.polygon.length;
-        const cz = room.polygon.reduce((s: number, p: number[]) => s + p[1], 0) / room.polygon.length;
         const el = document.createElement("div");
         el.textContent = room.name;
         el.style.position = "absolute";
@@ -553,18 +444,18 @@ export default function FloorplanViewer({ projectId, projectName }: { projectId?
     walls.forEach((wall, i) => {
       computeWallIntervals(wall, i, doors).forEach(([t0, t1]) => {
         const mesh = buildWallMesh(wall, t0, t1, wallMaterial);
-        if (mesh) modelGroup.add(mesh);
+        if (mesh) { mesh.userData = { type: 'wall' }; modelGroup.add(mesh); }
       });
     });
 
     doors.forEach((door) => {
       const mesh = buildDoorMesh(door);
-      if (mesh) modelGroup.add(mesh);
+      if (mesh) { mesh.userData = { type: 'door' }; modelGroup.add(mesh); }
     });
 
     windows.forEach((w) => {
       const mesh = buildWindowMesh(w, walls);
-      if (mesh) modelGroup.add(mesh);
+      if (mesh) { mesh.userData = { type: 'window' }; modelGroup.add(mesh); }
     });
 
     // Issue pins as 3D sprites
@@ -601,6 +492,19 @@ export default function FloorplanViewer({ projectId, projectName }: { projectId?
     updateCamera();
   }, [floorplanData, issues, selectedIssue]);
 
+  // ---------- Visibility toggles ----------
+
+  useEffect(() => {
+    const ctx = three.current;
+    if (!ctx.modelGroup) return;
+    ctx.modelGroup.children.forEach((child: any) => {
+      const type = child.userData?.type;
+      if (type === 'wall') child.visible = showWalls;
+      if (type === 'door') child.visible = showDoors;
+      if (type === 'window') child.visible = showWindows;
+    });
+  }, [showWalls, showDoors, showWindows]);
+
   // ---------- Computed values ----------
 
   const openIssues = issues.filter((i) => i.status === "open");
@@ -628,6 +532,148 @@ export default function FloorplanViewer({ projectId, projectName }: { projectId?
     setRightPanel("dashboard");
   };
 
+  const showToast = useCallback((message: string) => {
+    setToastMessage(message);
+    setTimeout(() => setToastMessage(null), 2000);
+  }, []);
+
+  const handleViewMode = useCallback((mode: "Plan" | "3D" | "Section" | "BIM") => {
+    setViewMode(mode);
+    const ctx = three.current;
+    if (!ctx.controls || !ctx.updateCamera) return;
+    const { controls, updateCamera, modelGroup } = ctx;
+    modelGroup?.traverse?.((child: any) => {
+      if (child.material && !child.isSprite) child.material.wireframe = false;
+    });
+    switch (mode) {
+      case "Plan": controls.polar = 0.01; controls.azimuth = 0; break;
+      case "3D": controls.polar = Math.PI / 3.2; controls.azimuth = Math.PI / 4; break;
+      case "Section": controls.polar = Math.PI / 2 - 0.05; controls.azimuth = 0; break;
+      case "BIM":
+        controls.polar = Math.PI / 3.2; controls.azimuth = Math.PI / 4;
+        modelGroup?.traverse?.((child: any) => {
+          if (child.material && !child.isSprite) child.material.wireframe = true;
+        });
+        break;
+    }
+    updateCamera();
+  }, []);
+
+  const handleCameraMode = useCallback((mode: "Orbit" | "Walk" | "Top" | "Perspective") => {
+    setCameraMode(mode);
+    const ctx = three.current;
+    if (!ctx.controls || !ctx.updateCamera || !ctx.camera) return;
+    const { controls, updateCamera, camera } = ctx;
+    switch (mode) {
+      case "Orbit": camera.fov = 50; controls.polar = Math.PI / 3.2; controls.azimuth = Math.PI / 4; break;
+      case "Walk": camera.fov = 65; controls.radius = 8; controls.polar = Math.PI / 2 - 0.15; break;
+      case "Top": camera.fov = 50; controls.polar = 0.01; controls.azimuth = 0; break;
+      case "Perspective": camera.fov = 70; controls.polar = Math.PI / 4; controls.azimuth = Math.PI / 3; break;
+    }
+    camera.updateProjectionMatrix();
+    updateCamera();
+  }, []);
+
+  const handleToggleEdit = useCallback(() => {
+    setEditMode(prev => { showToast(!prev ? "Edit mode enabled" : "Edit mode disabled"); return !prev; });
+  }, [showToast]);
+
+  const handleToggleMeasure = useCallback(() => {
+    setMeasureMode(prev => { showToast(!prev ? "Measure mode enabled" : "Measure mode disabled"); return !prev; });
+  }, [showToast]);
+
+  const handleToggleAnnotate = useCallback(() => {
+    setAnnotateMode(prev => { showToast(!prev ? "Annotate mode enabled" : "Annotate mode disabled"); return !prev; });
+  }, [showToast]);
+
+  const handleToggleExplode = useCallback(() => {
+    setExplodeMode(prev => {
+      const next = !prev;
+      showToast(next ? "Explode view enabled" : "Explode view disabled");
+      const ctx = three.current;
+      if (ctx.modelGroup && floorplanData) {
+        const bounds = computeBounds(floorplanData);
+        ctx.modelGroup.children.forEach((child: any) => {
+          if (child.userData?.type === 'room') {
+            if (next) {
+              child.userData.origX = child.position.x;
+              child.userData.origZ = child.position.z;
+              const dx = child.userData.cx - bounds.cx;
+              const dz = child.userData.cz - bounds.cz;
+              const dist = Math.hypot(dx, dz) || 1;
+              child.position.x += (dx / dist) * 2;
+              child.position.z += (dz / dist) * 2;
+            } else {
+              child.position.x = child.userData.origX ?? 0;
+              child.position.z = child.userData.origZ ?? 0;
+            }
+          }
+        });
+      }
+      return next;
+    });
+  }, [showToast, floorplanData]);
+
+  const handleToggleLayers = useCallback(() => {
+    setShowLayersPanel(prev => !prev); setShowSettingsPanel(false); setShowSharePanel(false);
+  }, []);
+
+  const handleToggleSettings = useCallback(() => {
+    setShowSettingsPanel(prev => !prev); setShowLayersPanel(false); setShowSharePanel(false);
+  }, []);
+
+  const handleToggleShare = useCallback(() => {
+    setShowSharePanel(prev => !prev); setShowLayersPanel(false); setShowSettingsPanel(false);
+  }, []);
+
+  const handleCopyShareLink = useCallback(() => {
+    navigator.clipboard.writeText(window.location.href).then(() => showToast("Link copied to clipboard"));
+  }, [showToast]);
+
+  const handleToggleGrid = useCallback(() => {
+    setShowGrid(prev => {
+      const next = !prev;
+      const ctx = three.current;
+      if (ctx.scene) ctx.scene.children.forEach((child: any) => { if (child instanceof THREE.GridHelper) child.visible = next; });
+      return next;
+    });
+  }, []);
+
+  const handleToggleShadows = useCallback(() => {
+    setShowShadows(prev => {
+      const next = !prev;
+      const ctx = three.current;
+      if (ctx.renderer) ctx.renderer.shadowMap.enabled = next;
+      return next;
+    });
+  }, []);
+
+  const handleVersionChange = useCallback((version: string) => {
+    setActiveVersion(version); showToast(`Switched to ${version}`);
+  }, [showToast]);
+
+  const handleNewIssueSubmit = useCallback(() => {
+    if (!newIssueName.trim()) return;
+    const bounds = floorplanData ? computeBounds(floorplanData) : { cx: 3, cz: 3, radius: 5 };
+    const newIssue: IssueData = {
+      _id: `new-${Date.now()}`,
+      name: newIssueName,
+      description: newIssueDescription || "No description provided.",
+      status: "open",
+      priority: newIssuePriority,
+      openedBy: { _id: "u1", username: "Sarah Parker" },
+      position: {
+        x: bounds.cx + (Math.random() - 0.5) * bounds.radius * 0.6,
+        z: bounds.cz + (Math.random() - 0.5) * bounds.radius * 0.6,
+      },
+      comments: [],
+      createdAt: new Date().toISOString(),
+    };
+    setIssues(prev => [newIssue, ...prev]);
+    setNewIssueName(""); setNewIssueDescription(""); setNewIssuePriority("medium");
+    setShowNewIssueForm(false); showToast("Issue created successfully");
+  }, [newIssueName, newIssueDescription, newIssuePriority, floorplanData, showToast]);
+
   // ---------- Loading / Error ----------
 
   return (
@@ -650,6 +696,12 @@ export default function FloorplanViewer({ projectId, projectName }: { projectId?
           </div>
         </div>
       )}
+      {/* Toast notification */}
+      {toastMessage && (
+        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-[60] bg-elevated border border-amber/30 rounded-lg px-4 py-2 text-xs text-ink shadow-panel animate-fade-up pointer-events-none">
+          {toastMessage}
+        </div>
+      )}
       {/* ===== Top Toolbar ===== */}
       <header className="flex items-center justify-between px-4 py-2 border-b border-border bg-panel shrink-0">
         <div className="flex items-center gap-4 min-w-0">
@@ -669,11 +721,12 @@ export default function FloorplanViewer({ projectId, projectName }: { projectId?
         </div>
 
         <div className="hidden md:flex items-center gap-1 bg-paper rounded-lg p-0.5 border border-border">
-          {["Plan", "3D", "Section", "BIM"].map((mode) => (
+          {(["Plan", "3D", "Section", "BIM"] as const).map((mode) => (
             <button
               key={mode}
+              onClick={() => handleViewMode(mode)}
               className={`text-xs font-medium px-3 py-1.5 rounded-md transition ${
-                mode === "3D" ? "bg-amber text-paper" : "text-faded hover:text-ink"
+                viewMode === mode ? "bg-amber text-paper" : "text-faded hover:text-ink"
               }`}
             >
               {mode}
@@ -683,15 +736,18 @@ export default function FloorplanViewer({ projectId, projectName }: { projectId?
 
         <div className="flex items-center gap-1.5">
           {[
-            { icon: Edit3, label: "Edit" },
-            { icon: Ruler, label: "Measure" },
-            { icon: Layers, label: "Layers" },
-            { icon: Settings, label: "Settings" },
-            { icon: Share2, label: "Share" },
-          ].map(({ icon: Icon, label }) => (
+            { icon: Edit3, label: "Edit", onClick: handleToggleEdit, active: editMode },
+            { icon: Ruler, label: "Measure", onClick: handleToggleMeasure, active: measureMode },
+            { icon: Layers, label: "Layers", onClick: handleToggleLayers, active: showLayersPanel },
+            { icon: Settings, label: "Settings", onClick: handleToggleSettings, active: showSettingsPanel },
+            { icon: Share2, label: "Share", onClick: handleToggleShare, active: showSharePanel },
+          ].map(({ icon: Icon, label, onClick, active }) => (
             <button
               key={label}
-              className="flex items-center gap-1.5 text-xs text-faded hover:text-ink px-2 py-1.5 rounded-md hover:bg-elevated transition"
+              onClick={onClick}
+              className={`flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-md transition ${
+                active ? "text-amber bg-amber/15" : "text-faded hover:text-ink hover:bg-elevated"
+              }`}
             >
               <Icon size={14} />
               <span className="hidden lg:inline">{label}</span>
@@ -708,7 +764,7 @@ export default function FloorplanViewer({ projectId, projectName }: { projectId?
           <div className="p-3 border-b border-border">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-semibold text-ink">Issues ({issues.length})</h2>
-              <button className="flex items-center gap-1 text-xs font-medium text-amber hover:opacity-80 transition">
+              <button onClick={() => setShowNewIssueForm(prev => !prev)} className="flex items-center gap-1 text-xs font-medium text-amber hover:opacity-80 transition">
                 <Plus size={14} />
                 New
               </button>
@@ -736,6 +792,48 @@ export default function FloorplanViewer({ projectId, projectName }: { projectId?
             </div>
           </div>
 
+          {showNewIssueForm && (
+            <div className="p-3 border-b border-border space-y-2 animate-fade-up">
+              <input
+                type="text"
+                placeholder="Issue name..."
+                value={newIssueName}
+                onChange={(e) => setNewIssueName(e.target.value)}
+                className="w-full text-xs bg-paper border border-border rounded-md px-2.5 py-1.5 text-ink placeholder-ghost focus:outline-none focus:border-amber/50"
+              />
+              <textarea
+                placeholder="Description (optional)..."
+                value={newIssueDescription}
+                onChange={(e) => setNewIssueDescription(e.target.value)}
+                rows={2}
+                className="w-full text-xs bg-paper border border-border rounded-md px-2.5 py-1.5 text-ink placeholder-ghost focus:outline-none focus:border-amber/50 resize-none"
+              />
+              <div className="flex items-center gap-2">
+                <select
+                  value={newIssuePriority}
+                  onChange={(e) => setNewIssuePriority(e.target.value as any)}
+                  className="text-[11px] bg-paper border border-border rounded-md px-2 py-1 text-ink focus:outline-none focus:border-amber/50"
+                >
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                </select>
+                <button
+                  onClick={handleNewIssueSubmit}
+                  className="text-[11px] font-medium bg-amber text-paper px-3 py-1 rounded-md hover:opacity-90 transition"
+                >
+                  Create
+                </button>
+                <button
+                  onClick={() => setShowNewIssueForm(false)}
+                  className="text-[11px] text-faded hover:text-ink transition"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="flex-1 overflow-y-auto p-2 space-y-1">
             {filteredIssues.length === 0 && (
               <div className="text-center py-8 text-faded text-xs">No issues match this filter.</div>
@@ -750,11 +848,27 @@ export default function FloorplanViewer({ projectId, projectName }: { projectId?
             ))}
           </div>
 
-          <div className="p-2 border-t border-border">
-            <button className="flex items-center gap-2 w-full text-xs text-faded hover:text-ink px-2 py-1.5 rounded-md hover:bg-elevated transition">
+          <div className="p-2 border-t border-border relative">
+            <button onClick={() => setShowFilterPanel(prev => !prev)} className="flex items-center gap-2 w-full text-xs text-faded hover:text-ink px-2 py-1.5 rounded-md hover:bg-elevated transition">
               <Filter size={14} />
               Filters — Discipline, Priority, Assigned, Status
             </button>
+            {showFilterPanel && (
+              <div className="absolute bottom-full left-2 right-2 mb-1 bg-panel border border-border rounded-lg p-3 shadow-panel z-30">
+                <div className="text-[11px] font-semibold text-ink mb-2">Priority</div>
+                {(["high", "medium", "low"] as const).map((p) => (
+                  <label key={p} className="flex items-center gap-2 text-[11px] text-faded cursor-pointer py-0.5">
+                    <input type="checkbox" defaultChecked className="accent-amber" />
+                    <span className="capitalize">{p}</span>
+                  </label>
+                ))}
+                <div className="text-[11px] font-semibold text-ink mb-2 mt-2">Assigned</div>
+                <label className="flex items-center gap-2 text-[11px] text-faded cursor-pointer py-0.5">
+                  <input type="checkbox" className="accent-amber" />
+                  Assigned to me
+                </label>
+              </div>
+            )}
           </div>
         </aside>
 
@@ -766,15 +880,18 @@ export default function FloorplanViewer({ projectId, projectName }: { projectId?
           {/* Floating controls */}
           <div className="absolute top-3 right-3 z-20 flex flex-col gap-1">
             {[
-              { icon: Edit3, label: "Annotate" },
-              { icon: Ruler, label: "Measure" },
-              { icon: Grid3x3, label: "Explode" },
-              { icon: Layers, label: "Layers" },
-            ].map(({ icon: Icon, label }) => (
+              { icon: Edit3, label: "Annotate", onClick: handleToggleAnnotate, active: annotateMode },
+              { icon: Ruler, label: "Measure", onClick: handleToggleMeasure, active: measureMode },
+              { icon: Grid3x3, label: "Explode", onClick: handleToggleExplode, active: explodeMode },
+              { icon: Layers, label: "Layers", onClick: handleToggleLayers, active: showLayersPanel },
+            ].map(({ icon: Icon, label, onClick, active }) => (
               <button
                 key={label}
                 title={label}
-                className="w-8 h-8 flex items-center justify-center rounded-md bg-panel/80 backdrop-blur border border-border text-faded hover:text-ink hover:bg-elevated transition text-xs"
+                onClick={onClick}
+                className={`w-8 h-8 flex items-center justify-center rounded-md backdrop-blur border transition text-xs ${
+                  active ? "bg-amber/20 border-amber/30 text-amber" : "bg-panel/80 border-border text-faded hover:text-ink hover:bg-elevated"
+                }`}
               >
                 <Icon size={15} />
               </button>
@@ -782,11 +899,12 @@ export default function FloorplanViewer({ projectId, projectName }: { projectId?
           </div>
 
           <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1 bg-panel/80 backdrop-blur rounded-lg px-2 py-1 border border-border">
-            {["Orbit", "Walk", "Top", "Perspective"].map((mode) => (
+            {(["Orbit", "Walk", "Top", "Perspective"] as const).map((mode) => (
               <button
                 key={mode}
+                onClick={() => handleCameraMode(mode)}
                 className={`text-[11px] font-medium px-2.5 py-1 rounded-md transition ${
-                  mode === "Orbit" ? "bg-amber/20 text-amber" : "text-faded hover:text-ink"
+                  cameraMode === mode ? "bg-amber/20 text-amber" : "text-faded hover:text-ink"
                 }`}
               >
                 {mode}
@@ -796,15 +914,84 @@ export default function FloorplanViewer({ projectId, projectName }: { projectId?
 
           <div className="absolute bottom-3 left-3 z-20 flex flex-col gap-1 bg-panel/80 backdrop-blur rounded-lg p-2 border border-border">
             <label className="flex items-center gap-2 text-[11px] text-faded cursor-pointer">
-              <input type="checkbox" defaultChecked className="accent-amber" /> Walls
+              <input type="checkbox" checked={showWalls} onChange={() => setShowWalls(prev => !prev)} className="accent-amber" /> Walls
             </label>
             <label className="flex items-center gap-2 text-[11px] text-faded cursor-pointer">
-              <input type="checkbox" defaultChecked className="accent-amber" /> Doors
+              <input type="checkbox" checked={showDoors} onChange={() => setShowDoors(prev => !prev)} className="accent-amber" /> Doors
             </label>
             <label className="flex items-center gap-2 text-[11px] text-faded cursor-pointer">
-              <input type="checkbox" defaultChecked className="accent-amber" /> Windows
+              <input type="checkbox" checked={showWindows} onChange={() => setShowWindows(prev => !prev)} className="accent-amber" /> Windows
             </label>
           </div>
+
+          {/* Layers overlay */}
+          {showLayersPanel && (
+            <div className="absolute top-3 right-14 z-30 w-56 bg-panel border border-border rounded-lg p-3 shadow-panel">
+              <h4 className="text-xs font-semibold text-ink mb-2">Layers</h4>
+              {[{ label: "Walls", checked: showWalls, toggle: () => setShowWalls(p => !p) },
+                { label: "Doors", checked: showDoors, toggle: () => setShowDoors(p => !p) },
+                { label: "Windows", checked: showWindows, toggle: () => setShowWindows(p => !p) },
+                { label: "Grid", checked: showGrid, toggle: handleToggleGrid },
+              ].map((layer) => (
+                <label key={layer.label} className="flex items-center gap-2 text-[11px] text-faded cursor-pointer py-1">
+                  <input type="checkbox" checked={layer.checked} onChange={layer.toggle} className="accent-amber" />
+                  {layer.label}
+                </label>
+              ))}
+            </div>
+          )}
+
+          {/* Settings overlay */}
+          {showSettingsPanel && (
+            <div className="absolute top-3 right-14 z-30 w-56 bg-panel border border-border rounded-lg p-3 shadow-panel">
+              <h4 className="text-xs font-semibold text-ink mb-2">Settings</h4>
+              <label className="flex items-center gap-2 text-[11px] text-faded cursor-pointer py-1">
+                <input type="checkbox" checked={showGrid} onChange={handleToggleGrid} className="accent-amber" />
+                Show Grid
+              </label>
+              <label className="flex items-center gap-2 text-[11px] text-faded cursor-pointer py-1">
+                <input type="checkbox" checked={showShadows} onChange={handleToggleShadows} className="accent-amber" />
+                Shadows
+              </label>
+              <div className="mt-2 pt-2 border-t border-border">
+                <div className="text-[11px] text-faded mb-1">Background</div>
+                <div className="flex gap-1">
+                  {[0x191613, 0x1a1a2e, 0x0d1117, 0x2d2d2d].map((color) => (
+                    <button
+                      key={color}
+                      onClick={() => {
+                        const ctx = three.current;
+                        if (ctx.scene) ctx.scene.background = new THREE.Color(color);
+                      }}
+                      className="w-6 h-6 rounded border border-border hover:border-amber transition"
+                      style={{ backgroundColor: `#${color.toString(16).padStart(6, '0')}` }}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Share overlay */}
+          {showSharePanel && (
+            <div className="absolute top-3 right-14 z-30 w-64 bg-panel border border-border rounded-lg p-3 shadow-panel">
+              <h4 className="text-xs font-semibold text-ink mb-2">Share Project</h4>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  readOnly
+                  value={typeof window !== 'undefined' ? window.location.href : ''}
+                  className="flex-1 text-[11px] bg-paper border border-border rounded px-2 py-1.5 text-faded truncate"
+                />
+                <button
+                  onClick={handleCopyShareLink}
+                  className="text-[11px] font-medium bg-amber text-paper px-3 py-1.5 rounded hover:opacity-90 transition shrink-0"
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+          )}
         </main>
 
         {/* ===== Right Panel ===== */}
@@ -815,9 +1002,9 @@ export default function FloorplanViewer({ projectId, projectName }: { projectId?
                 <h2 className="text-sm font-semibold text-ink mb-3">Project Progress</h2>
                 <div className="flex items-center gap-3 mb-2">
                   <div className="flex-1 h-2 rounded-full bg-elevated overflow-hidden">
-                    <div className="h-full rounded-full bg-amber" style={{ width: "62%" }} />
+                    <div className="h-full rounded-full bg-amber" style={{ width: `${project?.progress ?? 62}%` }} />
                   </div>
-                  <span className="text-sm font-semibold text-amber">62%</span>
+                  <span className="text-sm font-semibold text-amber">{project?.progress ?? 62}%</span>
                 </div>
               </div>
 
@@ -921,12 +1108,12 @@ export default function FloorplanViewer({ projectId, projectName }: { projectId?
       <footer className="border-t border-border bg-panel shrink-0">
         <div className="flex items-center px-4 py-2 gap-6">
           <div className="flex items-center gap-3 flex-1">
-            {[
+            {(project?.stages || [
               { label: "Foundation", pct: 100, status: "Done" },
               { label: "Structure", pct: 65, status: "In Progress" },
               { label: "MEP", pct: 20, status: "Pending" },
               { label: "Finishing", pct: 0, status: "Pending" },
-            ].map((stage) => (
+            ]).map((stage) => (
               <div key={stage.label} className="flex items-center gap-2 min-w-0">
                 <div className="w-16 h-1.5 rounded-full bg-elevated overflow-hidden shrink-0">
                   <div
@@ -949,8 +1136,9 @@ export default function FloorplanViewer({ projectId, projectName }: { projectId?
             {["v1", "v2", "v3", "v4"].map((v) => (
               <button
                 key={v}
+                onClick={() => handleVersionChange(v)}
                 className={`text-[11px] font-medium px-2 py-0.5 rounded ${
-                  v === "v4" ? "bg-amber/20 text-amber" : "text-faded hover:text-ink"
+                  activeVersion === v ? "bg-amber/20 text-amber" : "text-faded hover:text-ink"
                 }`}
               >
                 {v}

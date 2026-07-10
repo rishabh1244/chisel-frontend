@@ -14,7 +14,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 function AppLayout() {
   const location = useLocation()
-  const isFloorplan = location.pathname === "/floorplan"
+  const isFloorplan = location.pathname === "/floorplan" || location.pathname.startsWith("/project/")
 
   return (
     <div className="min-h-screen bg-[#1A1714] text-[#F4EFE7]">
